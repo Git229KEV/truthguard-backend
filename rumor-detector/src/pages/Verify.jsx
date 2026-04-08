@@ -1,5 +1,7 @@
 import { useState, useCallback, useEffect } from 'react'
 
+const API_BASE = import.meta.env.VITE_API_URL || 'http://127.0.0.1:8000'
+
 const Verify = () => {
   const [selectedImage, setSelectedImage] = useState(null)
   const [isDragging, setIsDragging] = useState(false)
@@ -19,7 +21,7 @@ const Verify = () => {
 
   const checkApiStatus = async () => {
     try {
-      const response = await fetch('http://127.0.0.1:8000/health')
+      const response = await fetch(`${API_BASE}/health`)
       if (response.ok) {
         const data = await response.json()
         setApiStatus(data)
@@ -110,7 +112,7 @@ const Verify = () => {
       
       setProcessStep(2)
       
-      const apiResponse = await fetch('http://127.0.0.1:8000/analyze', {
+      const apiResponse = await fetch(`${API_BASE}/analyze`, {
         method: 'POST',
         body: formData
       })
