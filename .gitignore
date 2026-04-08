@@ -1,0 +1,46 @@
+# Environment / Secrets
+backend/.env
+.env
+*.env
+
+# Python cache
+__pycache__/
+*.py[cod]
+*.pyo
+*.pyd
+.Python
+*.egg-info/
+dist/
+build/
+*.egg
+
+# Virtual environments
+venv/
+env/
+.venv/
+
+# Large model / binary files
+backend/models/
+*.bin
+*.pt
+*.pth
+*.onnx
+*.safetensors
+*.h5
+
+# Logs
+*.log
+backend/server.log
+backend/scratch/
+
+# Node.js
+rumor-detector/node_modules/
+rumor-detector/dist/
+
+# OS
+.DS_Store
+Thumbs.db
+
+# IDE
+.vscode/
+.idea/
