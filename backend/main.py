@@ -48,6 +48,27 @@ if not XLM_PATH or not os.path.exists(XLM_PATH):
 print(f"[INFO] SIGLIP_PATH: {SIGLIP_PATH}")
 print(f"[INFO] XLM_PATH: {XLM_PATH}")
 
+def download_from_gdrive(folder_id, dest_path):
+    try:
+        import gdown
+        os.makedirs(dest_path, exist_ok=True)
+        print(f"[INFO] Downloading from Google Drive folder: {folder_id}")
+        gdown.download_folder(f"https://drive.google.com/drive/folders/{folder_id}", output=dest_path, quiet=True)
+        print(f"[INFO] Downloaded to: {dest_path}")
+        return True
+    except Exception as e:
+        print(f"[WARN] GDrive download failed: {e}")
+        return False
+
+SIGLIP_DRIVE_ID = os.getenv("SIGLIP_DRIVE_ID")
+XLM_DRIVE_ID = os.getenv("XLM_DRIVE_ID")
+
+if SIGLIP_DRIVE_ID and (not os.path.exists(SIGLIP_PATH) or not os.listdir(SIGLIP_PATH)):
+    download_from_gdrive(SIGLIP_DRIVE_ID, SIGLIP_PATH)
+
+if XLM_DRIVE_ID and (not os.path.exists(XLM_PATH) or not os.listdir(XLM_PATH)):
+    download_from_gdrive(XLM_DRIVE_ID, XLM_PATH)
+
 genai_client = None
 tavily_client = None
 
@@ -101,36 +122,46 @@ def load_models_background():
             XLMRobertaTokenizer, XLMRobertaForSequenceClassification
         )
         
-        if SIGLIP_PATH and os.path.exists(SIGLIP_PATH):
-            print(f"[INFO] Loading SIGLIP from: {SIGLIP_PATH}")
-            siglip_model = SiglipForImageClassification.from_pretrained(SIGLIP_PATH, low_cpu_mem_usage=True)
-            siglip_model = siglip_model.to(device)
-            siglip_processor = SiglipProcessor.from_pretrained(SIGLIP_PATH)
-            siglip_model.eval()
-            print("[OK] SIGLIP model loaded")
-            
-            dummy_img = Image.new('RGB', (224, 224))
-            with torch.no_grad():
-                inputs = siglip_processor(images=dummy_img, return_tensors="pt").to(device)
-                _ = siglip_model(**inputs)
-            print("[OK] SIGLIP model warmed up")
-        else:
-            print(f"[WARN] SIGLIP path not found: {SIGLIP_PATH}")
+        if siglip_model is None:
+            try:
+                if SIGLIP_PATH and os.path.exists(SIGLIP_PATH):
+                    print(f"[INFO] Loading SIGLIP from: {SIGLIP_PATH}")
+                    siglip_model = SiglipForImageClassification.from_pretrained(SIGLIP_PATH, low_cpu_mem_usage=True)
+                    siglip_processor = SiglipProcessor.from_pretrained(SIGLIP_PATH)
+                else:
+                    print(f"[WARN] SIGLIP path not found: {SIGLIP_PATH}")
+                    raise FileNotFoundError(f"SigLIP model not found at {SIGLIP_PATH}")
+                siglip_model = siglip_model.to(device)
+                siglip_model.eval()
+                print("[OK] SIGLIP model loaded")
+                
+                dummy_img = Image.new('RGB', (384, 384))
+                with torch.no_grad():
+                    inputs = siglip_processor(images=dummy_img, return_tensors="pt").to(device)
+                    _ = siglip_model(**inputs)
+                print("[OK] SIGLIP model warmed up")
+            except Exception as e:
+                print(f"[FAIL] SIGLIP error: {e}")
         
-        if XLM_PATH and os.path.exists(XLM_PATH):
-            print(f"[INFO] Loading XLM-RoBERTa from: {XLM_PATH}")
-            xlm_tokenizer = XLMRobertaTokenizer.from_pretrained(XLM_PATH)
-            xlm_model = XLMRobertaForSequenceClassification.from_pretrained(XLM_PATH, low_cpu_mem_usage=True)
-            xlm_model = xlm_model.to(device)
-            xlm_model.eval()
-            print("[OK] XLM-RoBERTa model loaded")
-            
-            with torch.no_grad():
-                inputs = xlm_tokenizer("warmup", return_tensors="pt", padding=True, truncation=True, max_length=128).to(device)
-                _ = xlm_model(**inputs)
-            print("[OK] XLM-RoBERTa model warmed up")
-        else:
-            print(f"[WARN] XLM-RoBERTa path not found: {XLM_PATH}")
+        if xlm_model is None:
+            try:
+                if XLM_PATH and os.path.exists(XLM_PATH):
+                    print(f"[INFO] Loading XLM-RoBERTa from: {XLM_PATH}")
+                    xlm_tokenizer = XLMRobertaTokenizer.from_pretrained(XLM_PATH)
+                    xlm_model = XLMRobertaForSequenceClassification.from_pretrained(XLM_PATH, low_cpu_mem_usage=True)
+                else:
+                    print(f"[WARN] XLM-RoBERTa path not found: {XLM_PATH}")
+                    raise FileNotFoundError(f"XLM-RoBERTa model not found at {XLM_PATH}")
+                xlm_model = xlm_model.to(device)
+                xlm_model.eval()
+                print("[OK] XLM-RoBERTa model loaded")
+                
+                with torch.no_grad():
+                    inputs = xlm_tokenizer("warmup", return_tensors="pt", padding=True, truncation=True, max_length=128).to(device)
+                    _ = xlm_model(**inputs)
+                print("[OK] XLM-RoBERTa model warmed up")
+            except Exception as e:
+                print(f"[FAIL] XLM-R error: {e}")
             
     except Exception as e:
         print(f"[FAIL] Model loading error: {e}")
@@ -150,7 +181,7 @@ app = FastAPI(title="TruthGuard API", version="1.0.0", lifespan=lifespan)
 
 app.add_middleware(
     CORSMiddleware,
-    allow_origins=["http://localhost:5173", "http://127.0.0.1:5173", "http://localhost:5174"],
+    allow_origins=["*"],
     allow_credentials=True,
     allow_methods=["*"],
     allow_headers=["*"],
