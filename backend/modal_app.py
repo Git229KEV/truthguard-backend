@@ -302,11 +302,16 @@ Return your analysis in this EXACT format:
                 claim_verdict = "NON-RUMOR"
                 report_verdict = "NON-RUMOR"
                 extracted_text = ""
+                detailed_analysis = ""
+                
+                # Robust parsing for structured fields and detailed analysis paragraph
+                if "**EXTRACTED TEXT:**" in response_text:
+                    parts = response_text.split("**EXTRACTED TEXT:**")
+                    if len(parts) > 1:
+                        extracted_text = parts[1].split("**")[0].strip().strip("[]")
                 
                 lines = response_text.split('\n')
                 for line in lines:
-                    if 'EXTRACTED TEXT:' in line.upper():
-                        extracted_text = line.split('EXTRACTED TEXT:')[1].strip()
                     if 'CLAIM VERDICT:' in line.upper():
                         claim_text = line.split('CLAIM VERDICT:')[1].strip().upper()
                         if 'FALSE' in claim_text or 'FAKE' in claim_text or 'MISLEADING' in claim_text:
@@ -316,14 +321,25 @@ Return your analysis in this EXACT format:
                         if 'MANIPULATED' in auth_text or 'SUSPICIOUS' in auth_text or 'FAKE' in auth_text:
                             report_verdict = "RUMOR"
                 
+                if "**DETAILED ANALYSIS:**" in response_text:
+                    detailed_analysis = response_text.split("**DETAILED ANALYSIS:**")[1].strip()
+                    # Remove any trailing structural leftovers if present
+                    detailed_analysis = re.sub(r'\*\*.*?\*\*.*$', '', detailed_analysis, flags=re.DOTALL).strip()
+                else:
+                    # Fallback: remove the known labels from the full text
+                    detailed_analysis = response_text
+                    for label in ["**EXTRACTED TEXT:**", "**CLAIM VERDICT:**", "**REPORT AUTHENTICITY:**", "**DETAILED ANALYSIS:**"]:
+                        detailed_analysis = detailed_analysis.replace(label, "")
+                    detailed_analysis = detailed_analysis.strip()
+
                 gemini_verdict = "RUMOR" if (claim_verdict == "RUMOR" or report_verdict == "RUMOR") else "NON-RUMOR"
                 results["gemini"] = gemini_verdict
-                results["gemini_analysis"] = response_text
+                results["gemini_analysis"] = detailed_analysis
                 results["gemini_model_used"] = selected_model
                 results["claim_verdict"] = claim_verdict
                 results["report_verdict"] = report_verdict
                 results["original_text"] = extracted_text
-                print(f"[Gemini] Claim: {claim_verdict}, Report: {report_verdict} -> {gemini_verdict} ({selected_model})")
+                print(f"[Gemini] Claim: {claim_verdict}, Report: {report_verdict} -> {gemini_verdict}")
                 
             except Exception as e:
                 print(f"Gemini Error: {e}")
@@ -333,8 +349,18 @@ Return your analysis in this EXACT format:
         if tavily_client:
             try:
                 print("[Tavily] Running web search...")
-                search_query = results["original_text"] if results["original_text"] else "latest verified news facts"
                 
+                # Sanitize search query: remove placeholders and brackets
+                raw_query = results["original_text"]
+                clean_query = re.sub(r'\[.*?\]', '', raw_query).strip()
+                clean_query = clean_query.replace("**", "").replace('"', '').strip()
+                
+                if len(clean_query) < 5 or "no text" in clean_query.lower():
+                    search_query = "latest news fact check verification"
+                else:
+                    search_query = clean_query[:300] # Limit length for API safety
+                
+                print(f"[Tavily] Query: {search_query}")
                 tav_res = tavily_client.search(
                     query=search_query,
                     search_depth="advanced",

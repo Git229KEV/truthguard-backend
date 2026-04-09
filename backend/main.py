@@ -463,15 +463,19 @@ Return your analysis in this EXACT format:
                 )
                 
                 response_text = response.text
-                
                 claim_verdict = "NON-RUMOR"
                 report_verdict = "NON-RUMOR"
-                gemini_extracted_text = ""
+                extracted_text = ""
+                detailed_paragraph = ""
                 
+                # Robust parsing for structured fields and detailed analysis paragraph
+                if "**EXTRACTED TEXT:**" in response_text:
+                    parts = response_text.split("**EXTRACTED TEXT:**")
+                    if len(parts) > 1:
+                        extracted_text = parts[1].split("**")[0].strip().strip("[]")
+
                 lines = response_text.split('\n')
                 for line in lines:
-                    if 'EXTRACTED TEXT:' in line.upper():
-                        gemini_extracted_text = line.split('EXTRACTED TEXT:')[1].strip()
                     if 'CLAIM VERDICT:' in line.upper():
                         claim_text = line.split('CLAIM VERDICT:')[1].strip().upper()
                         if 'FALSE' in claim_text or 'FAKE' in claim_text or 'MISLEADING' in claim_text:
@@ -485,6 +489,17 @@ Return your analysis in this EXACT format:
                         elif 'AUTHENTIC' in auth_text or 'GENUINE' in auth_text:
                             report_verdict = "NON-RUMOR"
                 
+                if "**DETAILED ANALYSIS:**" in response_text:
+                    detailed_paragraph = response_text.split("**DETAILED ANALYSIS:**")[1].strip()
+                    # Remove any trailing structural leftovers if present
+                    detailed_paragraph = re.sub(r'\*\*.*?\*\*.*$', '', detailed_paragraph, flags=re.DOTALL).strip()
+                else:
+                    # Fallback: remove the known labels from the full text
+                    detailed_paragraph = response_text
+                    for label in ["**EXTRACTED TEXT:**", "**CLAIM VERDICT:**", "**REPORT AUTHENTICITY:**", "**DETAILED ANALYSIS:**"]:
+                        detailed_paragraph = detailed_paragraph.replace(label, "")
+                    detailed_paragraph = detailed_paragraph.strip()
+
                 gemini_verdict = "RUMOR" if (claim_verdict == "RUMOR" or report_verdict == "RUMOR") else "NON-RUMOR"
                 
                 grounding_chunks = []
@@ -503,11 +518,11 @@ Return your analysis in this EXACT format:
                 
                 results["sources"] = grounding_chunks
                 results["gemini"] = gemini_verdict
-                results["gemini_analysis"] = response_text
+                results["gemini_analysis"] = detailed_paragraph
                 results["gemini_model_used"] = selected_model
                 results["claim_verdict"] = claim_verdict
                 results["report_verdict"] = report_verdict
-                results["original_text"] = gemini_extracted_text
+                results["original_text"] = extracted_text
                 
                 print(f"[Gemini] Claim: {claim_verdict}, Report: {report_verdict} -> Final: {gemini_verdict}")
                 
@@ -564,7 +579,17 @@ Return your analysis in this EXACT format:
                 text_display = "ERROR"
 
         # 📑 PILLAR 3: TAVILY (WEB RESEARCH) - INDEPENDENT
-        search_command = results["original_text"] if results["original_text"] else (extracted_text[:200] if extracted_text else "latest news verified facts")
+        # Sanitize search query: remove placeholders and brackets
+        raw_query = results["original_text"]
+        clean_query = re.sub(r'\[.*?\]', '', raw_query).strip()
+        clean_query = clean_query.replace("**", "").replace('"', '').strip()
+        
+        if len(clean_query) < 5 or "no text" in clean_query.lower():
+            search_command = "latest news fact check verification"
+        else:
+            search_command = clean_query[:300] # Limit length for API safety
+            
+        print(f"[Tavily] Query: {search_command}")
         verdict_tav = "UNAVAILABLE"
         
         if tavily_client:
