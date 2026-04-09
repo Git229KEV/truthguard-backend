@@ -48,13 +48,63 @@ if not XLM_PATH or not os.path.exists(XLM_PATH):
 print(f"[INFO] SIGLIP_PATH: {SIGLIP_PATH}")
 print(f"[INFO] XLM_PATH: {XLM_PATH}")
 
+def list_gdrive_folder_contents(folder_id):
+    try:
+        import gdown
+        url = f"https://drive.google.com/drive/folders/{folder_id}"
+        files = gdown.list_folder(url)
+        return files
+    except Exception as e:
+        print(f"[WARN] Cannot list folder: {e}")
+        return []
+
 def download_from_gdrive(folder_id, dest_path):
     try:
         import gdown
         os.makedirs(dest_path, exist_ok=True)
         print(f"[INFO] Downloading from Google Drive folder: {folder_id}")
-        gdown.download_folder(f"https://drive.google.com/drive/folders/{folder_id}", output=dest_path, quiet=True)
-        print(f"[INFO] Downloaded to: {dest_path}")
+        
+        url = f"https://drive.google.com/drive/folders/{folder_id}"
+        
+        try:
+            gdown.download_folder(url, output=dest_path, quiet=False, use_cookies=False)
+        except Exception as e:
+            print(f"[WARN] gdown.download_folder failed: {e}")
+            print("[INFO] Trying with --fuzzy flag...")
+            import subprocess
+            result = subprocess.run(
+                ["gdown", "--fuzzy", "-O", dest_path, url],
+                capture_output=True, text=True
+            )
+            print(f"[INFO] gdown output: {result.stdout}")
+            if result.returncode != 0:
+                print(f"[WARN] gdown error: {result.stderr}")
+        
+        print(f"[INFO] Contents after download:")
+        for root, dirs, files in os.walk(dest_path):
+            for f in files:
+                full_path = os.path.join(root, f)
+                size = os.path.getsize(full_path) / (1024*1024)
+                print(f"  {os.path.relpath(full_path, dest_path)} ({size:.1f} MB)")
+        
+        model_files = []
+        for root, dirs, files in os.walk(dest_path):
+            for f in files:
+                if f in ['model.safetensors', 'pytorch_model.bin', 'config.json', 'tokenizer.json']:
+                    model_files.append(os.path.join(root, f))
+        
+        if model_files:
+            print(f"[INFO] Found model files: {model_files}")
+            if dest_path not in [os.path.dirname(f) for f in model_files]:
+                first_file = model_files[0]
+                parent = os.path.dirname(first_file)
+                if parent != dest_path:
+                    print(f"[INFO] Moving files from {parent} to {dest_path}")
+                    import shutil
+                    for f in model_files:
+                        shutil.move(f, dest_path)
+                    shutil.rmtree(parent)
+        
         return True
     except Exception as e:
         print(f"[WARN] GDrive download failed: {e}")
@@ -63,11 +113,26 @@ def download_from_gdrive(folder_id, dest_path):
 SIGLIP_DRIVE_ID = os.getenv("SIGLIP_DRIVE_ID")
 XLM_DRIVE_ID = os.getenv("XLM_DRIVE_ID")
 
-if SIGLIP_DRIVE_ID and (not os.path.exists(SIGLIP_PATH) or not os.listdir(SIGLIP_PATH)):
-    download_from_gdrive(SIGLIP_DRIVE_ID, SIGLIP_PATH)
+print(f"[INFO] SIGLIP_DRIVE_ID: {'set' if SIGLIP_DRIVE_ID else 'NOT SET'}")
+print(f"[INFO] XLM_DRIVE_ID: {'set' if XLM_DRIVE_ID else 'NOT SET'}")
 
-if XLM_DRIVE_ID and (not os.path.exists(XLM_PATH) or not os.listdir(XLM_PATH)):
+siglip_exists = os.path.exists(SIGLIP_PATH) and os.listdir(SIGLIP_PATH)
+xlm_exists = os.path.exists(XLM_PATH) and os.listdir(XLM_PATH)
+
+print(f"[INFO] SigLIP dir exists: {os.path.exists(SIGLIP_PATH)}, has files: {siglip_exists}")
+print(f"[INFO] XLM dir exists: {os.path.exists(XLM_PATH)}, has files: {xlm_exists}")
+
+if SIGLIP_DRIVE_ID and not siglip_exists:
+    print(f"[INFO] SigLIP not found, downloading from GDrive...")
+    download_from_gdrive(SIGLIP_DRIVE_ID, SIGLIP_PATH)
+    siglip_exists = os.path.exists(SIGLIP_PATH) and os.listdir(SIGLIP_PATH)
+    print(f"[INFO] SigLIP download result - exists: {siglip_exists}")
+
+if XLM_DRIVE_ID and not xlm_exists:
+    print(f"[INFO] XLM not found, downloading from GDrive...")
     download_from_gdrive(XLM_DRIVE_ID, XLM_PATH)
+    xlm_exists = os.path.exists(XLM_PATH) and os.listdir(XLM_PATH)
+    print(f"[INFO] XLM download result - exists: {xlm_exists}")
 
 genai_client = None
 tavily_client = None
@@ -109,11 +174,34 @@ models_ready = {
     "xlm": False
 }
 
+def get_available_memory_mb():
+    try:
+        import psutil
+        return psutil.virtual_memory().available / (1024 * 1024)
+    except:
+        return 999999
+
+def find_model_dir(base_path):
+    if os.path.exists(base_path):
+        for root, dirs, files in os.walk(base_path):
+            if 'config.json' in files and any(f in files for f in ['pytorch_model.bin', 'model.safetensors', 'model.bin']):
+                return root
+    return base_path
+
 def load_models_background():
     global siglip_model, siglip_processor, xlm_tokenizer, xlm_model, models_ready
     print("[INFO] Background thread starting model loading...")
+    
+    available_mem = get_available_memory_mb()
+    print(f"[INFO] Available memory: {available_mem:.0f} MB")
+    
     if not torch:
         models_ready["status"] = "partial"
+        return
+    
+    if available_mem < 1500:
+        print("[WARN] Low memory detected. Skipping local models (cloud-only mode).")
+        models_ready["status"] = "cloud-only"
         return
         
     try:
@@ -124,10 +212,15 @@ def load_models_background():
         
         if siglip_model is None:
             try:
+                siglip_actual_path = find_model_dir(SIGLIP_PATH)
                 if SIGLIP_PATH and os.path.exists(SIGLIP_PATH):
-                    print(f"[INFO] Loading SIGLIP from: {SIGLIP_PATH}")
-                    siglip_model = SiglipForImageClassification.from_pretrained(SIGLIP_PATH, low_cpu_mem_usage=True)
-                    siglip_processor = SiglipProcessor.from_pretrained(SIGLIP_PATH)
+                    print(f"[INFO] Loading SIGLIP from: {siglip_actual_path}")
+                    siglip_model = SiglipForImageClassification.from_pretrained(
+                        siglip_actual_path, 
+                        low_cpu_mem_usage=True,
+                        torch_dtype=torch.float32
+                    )
+                    siglip_processor = SiglipProcessor.from_pretrained(siglip_actual_path)
                 else:
                     print(f"[WARN] SIGLIP path not found: {SIGLIP_PATH}")
                     raise FileNotFoundError(f"SigLIP model not found at {SIGLIP_PATH}")
@@ -142,13 +235,19 @@ def load_models_background():
                 print("[OK] SIGLIP model warmed up")
             except Exception as e:
                 print(f"[FAIL] SIGLIP error: {e}")
+                siglip_model = None
         
         if xlm_model is None:
             try:
+                xlm_actual_path = find_model_dir(XLM_PATH)
                 if XLM_PATH and os.path.exists(XLM_PATH):
-                    print(f"[INFO] Loading XLM-RoBERTa from: {XLM_PATH}")
-                    xlm_tokenizer = XLMRobertaTokenizer.from_pretrained(XLM_PATH)
-                    xlm_model = XLMRobertaForSequenceClassification.from_pretrained(XLM_PATH, low_cpu_mem_usage=True)
+                    print(f"[INFO] Loading XLM-RoBERTa from: {xlm_actual_path}")
+                    xlm_tokenizer = XLMRobertaTokenizer.from_pretrained(xlm_actual_path)
+                    xlm_model = XLMRobertaForSequenceClassification.from_pretrained(
+                        xlm_actual_path, 
+                        low_cpu_mem_usage=True,
+                        torch_dtype=torch.float32
+                    )
                 else:
                     print(f"[WARN] XLM-RoBERTa path not found: {XLM_PATH}")
                     raise FileNotFoundError(f"XLM-RoBERTa model not found at {XLM_PATH}")
@@ -162,6 +261,7 @@ def load_models_background():
                 print("[OK] XLM-RoBERTa model warmed up")
             except Exception as e:
                 print(f"[FAIL] XLM-R error: {e}")
+                xlm_model = None
             
     except Exception as e:
         print(f"[FAIL] Model loading error: {e}")

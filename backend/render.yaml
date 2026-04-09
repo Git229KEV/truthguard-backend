@@ -1,0 +1,25 @@
+# Render Blueprint Specification
+# https://render.com/docs/blueprint-spec
+
+services:
+  - type: web
+    name: truthguard-api
+    env: python
+    region: oregon
+    plan: free
+    buildCommand: pip install -r requirements.txt
+    startCommand: uvicorn main:app --host 0.0.0.0 --port $PORT
+    healthCheckPath: /health
+    envVars:
+      - key: GOOGLE_API_KEY
+        sync: false
+      - key: TAVILY_API_KEY
+        sync: false
+      - key: SIGLIP_DRIVE_ID
+        sync: false
+      - key: XLM_DRIVE_ID
+        sync: false
+      - key: SIGLIP_MODEL_PATH
+        value: /opt/render/models/siglip
+      - key: XLM_ROBERTA_MODEL_PATH
+        value: /opt/render/models/xlm

@@ -11,3 +11,4 @@ sentencepiece>=0.1.0
 protobuf>=3.20.1
 gdown>=5.0.0
 tenacity>=8.0.0
+psutil>=5.9.0

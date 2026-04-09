@@ -166,7 +166,12 @@ const Verify = () => {
           {apiStatus && (
             <div className={`api-status ${apiStatus.models_status === 'ready' ? 'ready' : 'loading'}`}>
               <span className="status-dot"></span>
-              <span>Backend: {apiStatus.models_status === 'ready' ? 'Models Loaded' : apiStatus.models_status}</span>
+              <span>Backend: {
+                apiStatus.models_status === 'ready' ? 'Full Mode' :
+                apiStatus.models_status === 'partial' ? 'Limited Mode' :
+                apiStatus.models_status === 'cloud-only' ? 'Cloud Mode' :
+                apiStatus.models_status
+              }</span>
             </div>
           )}
         </div>
