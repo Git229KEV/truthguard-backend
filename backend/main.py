@@ -143,6 +143,7 @@ if not xlm_exists or not xlm_valid:
 
 genai_client = None
 tavily_client = None
+tavily_cache = {}
 
 if GOOGLE_API_KEY:
     try:
@@ -434,7 +435,7 @@ async def analyze(file: UploadFile = File(...)):
                 for model_name in model_names:
                     try:
                         model = genai_client.GenerativeModel(model_name)
-                        response = gemini_generate_retry(model, "test", config={"max_output_tokens": 10})
+                        response = gemini_generate_retry(model, "test", config={"max_output_tokens": 10, "temperature": 0})
                         selected_model = model_name
                         print(f"[Gemini] Using model: {model_name}")
                         break
@@ -473,10 +474,13 @@ Explain the image authenticity evaluation.
                 
                 response = model.generate_content(
                     [{"mime_type": "image/jpeg", "data": img_base64}, fact_check_prompt],
-                    generation_config={"temperature": 0.1}
+                    generation_config={"temperature": 0}
                 )
                 
                 response_text = response.text
+                
+                claim_verdict = "NON-RUMOR"
+                report_verdict = "NON-RUMOR"
                 
                 lines = response_text.split('\n')
                 for line in lines:
@@ -484,13 +488,13 @@ Explain the image authenticity evaluation.
                         claim_text = line.split('CLAIM VERDICT:')[1].strip().upper()
                         if 'FALSE' in claim_text or 'FAKE' in claim_text or 'MISLEADING' in claim_text:
                             claim_verdict = "RUMOR"
-                        else:
+                        elif 'TRUE' in claim_text or 'VERIFIED' in claim_text:
                             claim_verdict = "NON-RUMOR"
                     if 'REPORT AUTHENTICITY:' in line.upper():
                         auth_text = line.split('REPORT AUTHENTICITY:')[1].strip().upper()
                         if 'MANIPULATED' in auth_text or 'SUSPICIOUS' in auth_text or 'FAKE' in auth_text:
                             report_verdict = "RUMOR"
-                        else:
+                        elif 'AUTHENTIC' in auth_text or 'GENUINE' in auth_text:
                             report_verdict = "NON-RUMOR"
                 
                 gemini_verdict = "RUMOR" if (claim_verdict == "RUMOR" or report_verdict == "RUMOR") else "NON-RUMOR"
@@ -512,6 +516,7 @@ Explain the image authenticity evaluation.
                 results["sources"] = grounding_chunks
                 results["gemini"] = gemini_verdict
                 results["gemini_analysis"] = response_text
+                results["gemini_model_used"] = selected_model
                 results["claim_verdict"] = claim_verdict
                 results["report_verdict"] = report_verdict
                 
@@ -575,13 +580,19 @@ Explain the image authenticity evaluation.
         
         if tavily_client:
             try:
-                print(f"[Tavily] Searching: {search_command[:80]}...")
-                tav_res = tavily_client.search(
-                    query=search_command, 
-                    search_depth="advanced", 
-                    include_answer="advanced", 
-                    max_results=5
-                )
+                cache_key = search_command.lower().strip()
+                if cache_key in tavily_cache:
+                    print(f"[Tavily] Using cached result for: {search_command[:80]}...")
+                    tav_res = tavily_cache[cache_key]
+                else:
+                    print(f"[Tavily] Searching: {search_command[:80]}...")
+                    tav_res = tavily_client.search(
+                        query=search_command, 
+                        search_depth="advanced", 
+                        include_answer="advanced", 
+                        max_results=5
+                    )
+                    tavily_cache[cache_key] = tav_res
                 
                 tav_sources = [{"title": r.get("title"), "url": r.get("url")} for r in tav_res.get("results", [])]
                 if not results["sources"]:
@@ -625,6 +636,8 @@ Explain the image authenticity evaluation.
                 elif fact_score > rumor_score + 1:
                     verdict_tav = "NON-RUMOR"
                 elif rumor_score > fact_score:
+                    verdict_tav = "RUMOR"
+                elif rumor_score == fact_score and rumor_score > 0:
                     verdict_tav = "NON-RUMOR"
                 else:
                     verdict_tav = "NON-RUMOR"

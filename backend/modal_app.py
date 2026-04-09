@@ -10,7 +10,11 @@ import base64
 import re
 import threading
 
-app = App("truthguard-api", secrets=[Secret.from_name("HF_TOKEN")])
+app = App("truthguard-api", secrets=[
+    Secret.from_name("HF_TOKEN"),
+    Secret.from_name("GOOGLE_KEY_NEW"),
+    Secret.from_name("TAVILY_KEY_NEW")
+])
 
 MODAL_IMAGE = Image.debian_slim(python_version="3.11").pip_install(
     "fastapi>=0.110.0",
@@ -19,7 +23,7 @@ MODAL_IMAGE = Image.debian_slim(python_version="3.11").pip_install(
     "torch>=2.0.0",
     "pillow>=10.0.0",
     "tavily-python>=0.3.0",
-    "google-generativeai>=0.7.0",
+    "google-genai>=1.0.0",
     "python-multipart>=0.0.9",
     "python-dotenv>=1.0.0",
     "sentencepiece>=0.1.0",
@@ -52,7 +56,28 @@ def get_token():
 
 
 def download_models():
-    global siglip_model, siglip_processor, xlm_model, xlm_tokenizer, torch, models_ready, models_loaded
+    global genai_client, tavily_client, siglip_model, siglip_processor, xlm_model, xlm_tokenizer, torch, models_ready, models_loaded
+    
+    google_api_key = os.environ.get("GOOGLE_API_KEY", "") or os.environ.get("GEMINI_KEY", "")
+    tavily_api_key = os.environ.get("TAVILY_API_KEY", "") or os.environ.get("TAVILY_KEY", "")
+    
+    print(f"[DEBUG] GOOGLE_API_KEY set: {bool(google_api_key)}, TAVILY_API_KEY set: {bool(tavily_api_key)}")
+    
+    if not genai_client and google_api_key:
+        try:
+            from google import genai
+            genai_client = genai.Client(api_key=google_api_key)
+            print("[OK] Gemini configured with google.genai")
+        except Exception as e:
+            print(f"[FAIL] Gemini config: {e}")
+    
+    if not tavily_client and tavily_api_key:
+        try:
+            from tavily import TavilyClient
+            tavily_client = TavilyClient(api_key=tavily_api_key)
+            print("[OK] Tavily configured")
+        except Exception as e:
+            print(f"[FAIL] Tavily config: {e}")
     
     if models_loaded:
         return
@@ -162,7 +187,7 @@ def health():
     }
 
 
-@app.function(image=MODAL_IMAGE, timeout=300, memory=4096)
+@app.function(image=MODAL_IMAGE, timeout=600, memory=4096)
 @fastapi_endpoint(method="POST")
 async def analyze(file: UploadFile = File(...)):
     from PIL import Image
@@ -186,6 +211,12 @@ async def analyze(file: UploadFile = File(...)):
             "final": "NON-RUMOR",
             "sources": [],
             "confidence": 0.5,
+            "gemini_analysis": "",
+            "tavily_analysis": "",
+            "translated": "",
+            "original_text": "",
+            "claim_verdict": "NON-RUMOR",
+            "report_verdict": "NON-RUMOR"
         }
         
         if torch and siglip_model and siglip_processor:
@@ -193,9 +224,11 @@ async def analyze(file: UploadFile = File(...)):
                 inputs = siglip_processor(images=image, return_tensors="pt")
                 with torch.no_grad():
                     logits = siglip_model(**inputs).logits
-                pred = logits.argmax().item()
+                    probs = torch.softmax(logits, dim=1)
+                    pred = probs.argmax().item()
                 raw_vis = siglip_model.config.id2label.get(pred, str(pred))
                 results["visual"] = "RUMOR" if any(x in raw_vis.lower() for x in ["fake", "false", "rumor"]) else "NON-RUMOR"
+                results["visual_confidence"] = float(probs.max().item())
                 print(f"[SigLIP] {results['visual']}")
             except Exception as e:
                 print(f"SigLIP Error: {e}")
@@ -206,18 +239,150 @@ async def analyze(file: UploadFile = File(...)):
                 inputs_xlm = xlm_tokenizer(text_input, return_tensors="pt", truncation=True, padding=True, max_length=512)
                 with torch.no_grad():
                     logits = xlm_model(**inputs_xlm).logits
-                text_pred = logits.argmax().item()
+                    text_probs = torch.softmax(logits, dim=1)
+                    text_pred = text_probs.argmax().item()
+                    confidence = text_probs.max().item()
                 raw_txt = xlm_model.config.id2label.get(text_pred, str(text_pred))
                 results["text"] = "RUMOR" if "0" in raw_txt or "fake" in raw_txt.lower() else "NON-RUMOR"
+                results["text_confidence"] = float(confidence)
                 print(f"[XLM-R] {results['text']}")
             except Exception as e:
                 print(f"XLM Error: {e}")
         
-        verdicts = [v for v in [results["visual"], results["text"]] if v in ["RUMOR", "NON-RUMOR"]]
-        r_count = verdicts.count("RUMOR")
-        results["final"] = "RUMOR" if r_count > len(verdicts) / 2 else "NON-RUMOR"
-        results["confidence"] = max(r_count, len(verdicts) - r_count) / len(verdicts) if verdicts else 0.5
+        if genai_client:
+            try:
+                print("[Gemini] Running analysis...")
+                
+                model_names = [
+                    "gemini-3.1-pro-preview",
+                    "gemini-3-flash-preview",
+                    "gemini-3.1-flash-lite-preview",
+                    "gemini-2.5-flash",
+                ]
+                
+                fact_check_prompt = """You are a professional fact-checker analyzing a news image.
+
+TASK 1: Extract any visible text from the image and translate non-English text to English.
+TASK 2: Evaluate the image for signs of manipulation.
+TASK 3: Evaluate the CLAIM (text content) for truthfulness.
+
+Return your analysis in this format:
+**CLAIM VERDICT:** [TRUE/FALSE/MISLEADING/UNVERIFIABLE]
+**REPORT AUTHENTICITY:** [AUTHENTIC/MANIPULATED/SUSPICIOUS]
+**DETAILED ANALYSIS:** [Your analysis]"""
+                
+                from google.genai.types import Content, Part
+                
+                response_text = None
+                selected_model = None
+                
+                for model_name in model_names:
+                    try:
+                        print(f"[Gemini] Trying model: {model_name}")
+                        response = genai_client.models.generate_content(
+                            model=model_name,
+                            contents=Content(parts=[
+                                Part(inline_data={"mime_type": "image/jpeg", "data": img_base64}),
+                                Part(text=fact_check_prompt)
+                            ]),
+                            config={"temperature": 0.1, "max_output_tokens": 2048}
+                        )
+                        response_text = response.text
+                        selected_model = model_name
+                        print(f"[Gemini] Using model: {model_name}")
+                        break
+                    except Exception as e:
+                        print(f"[Gemini] Failed {model_name}: {e}")
+                        continue
+                
+                if not selected_model:
+                    raise Exception("No working Gemini model found")
+                
+                claim_verdict = "NON-RUMOR"
+                report_verdict = "NON-RUMOR"
+                
+                lines = response_text.split('\n')
+                for line in lines:
+                    if 'CLAIM VERDICT:' in line.upper():
+                        claim_text = line.split('CLAIM VERDICT:')[1].strip().upper()
+                        if 'FALSE' in claim_text or 'FAKE' in claim_text or 'MISLEADING' in claim_text:
+                            claim_verdict = "RUMOR"
+                    if 'REPORT AUTHENTICITY:' in line.upper():
+                        auth_text = line.split('REPORT AUTHENTICITY:')[1].strip().upper()
+                        if 'MANIPULATED' in auth_text or 'SUSPICIOUS' in auth_text or 'FAKE' in auth_text:
+                            report_verdict = "RUMOR"
+                
+                gemini_verdict = "RUMOR" if (claim_verdict == "RUMOR" or report_verdict == "RUMOR") else "NON-RUMOR"
+                results["gemini"] = gemini_verdict
+                results["gemini_analysis"] = response_text
+                results["gemini_model_used"] = selected_model
+                results["claim_verdict"] = claim_verdict
+                results["report_verdict"] = report_verdict
+                print(f"[Gemini] Claim: {claim_verdict}, Report: {report_verdict} -> {gemini_verdict} ({selected_model})")
+                
+            except Exception as e:
+                print(f"Gemini Error: {e}")
+                results["gemini"] = "ERROR"
+                results["gemini_analysis"] = f"Failed: {str(e)}"
         
+        if tavily_client:
+            try:
+                print("[Tavily] Running web search...")
+                search_query = "latest verified news facts"
+                
+                tav_res = tavily_client.search(
+                    query=search_query,
+                    search_depth="advanced",
+                    include_answer="advanced",
+                    max_results=5
+                )
+                
+                tav_sources = [{"title": r.get("title"), "url": r.get("url")} for r in tav_res.get("results", [])]
+                if not results["sources"]:
+                    results["sources"] = tav_sources
+                
+                tav_answer = tav_res.get("answer", "")
+                tav_context = " ".join([r.get("content", "") for r in tav_res.get("results", [])[:3]])
+                combined_text = (tav_answer + " " + tav_context).lower()
+                
+                strong_rumor = ["false claim", "fake news", "hoax", "misinformation", "debunked", "fabricated"]
+                strong_fact = ["confirmed by", "official statement", "verified", "true"]
+                
+                rumor_score = sum(2 for phrase in strong_rumor if phrase in combined_text)
+                fact_score = sum(2 for phrase in strong_fact if phrase in combined_text)
+                
+                verdict_tav = "NON-RUMOR"
+                if rumor_score > fact_score + 1:
+                    verdict_tav = "RUMOR"
+                
+                results["tavily"] = verdict_tav
+                results["tavily_analysis"] = tav_answer if tav_answer else "Web search completed."
+                print(f"[Tavily] R:{rumor_score} F:{fact_score} -> {verdict_tav}")
+                
+            except Exception as e:
+                print(f"Tavily Error: {e}")
+                results["tavily"] = "ERROR"
+                results["tavily_analysis"] = f"Search failed: {str(e)}"
+        
+        verdicts = {
+            "visual": results["visual"],
+            "text": results["text"],
+            "tavily": results["tavily"],
+            "gemini": results["gemini"]
+        }
+        
+        valid_votes = [v for v in verdicts.values() if v in ["RUMOR", "NON-RUMOR"]]
+        r_count = valid_votes.count("RUMOR")
+        nr_count = valid_votes.count("NON-RUMOR")
+        
+        if r_count > nr_count:
+            results["final"] = "RUMOR"
+        elif nr_count > r_count:
+            results["final"] = "NON-RUMOR"
+        
+        results["confidence"] = float(max(r_count, nr_count) / len(valid_votes)) if valid_votes else 0.5
+        
+        print(f"[FINAL] R:{r_count} NR:{nr_count} -> {results['final']}")
         return results
         
     except Exception as e:

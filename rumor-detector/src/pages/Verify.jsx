@@ -1,4 +1,5 @@
 import { useState, useCallback, useEffect } from 'react'
+import ModelResultCard from '../components/ModelResultCard'
 
 const API_BASE = import.meta.env.VITE_API_URL || 'http://127.0.0.1:8000'
 const HEALTH_URL = import.meta.env.VITE_HEALTH_URL || `${API_BASE}/health`
@@ -269,42 +270,58 @@ const Verify = () => {
                   </p>
                   {detailedResult && (
                     <div className="detailed-analysis">
-                      <h4>Analysis Breakdown</h4>
-                      <div className="analysis-items">
-                        <div className={`analysis-item ${detailedResult.visual.toLowerCase().replace('-', '')}`}>
-                          <span className="item-label">Visual Analysis:</span>
-                          <span className="item-value">{detailedResult.visual}</span>
-                          {detailedResult.visual_confidence && (
-                            <span className="item-confidence">({(detailedResult.visual_confidence * 100).toFixed(0)}%)</span>
-                          )}
-                        </div>
+                      <h4>Multi-Model Verification Report</h4>
+                      
+                      <div className="model-results-grid">
+                        {/* M1: SigLIP Visual Analysis */}
+                        <ModelResultCard 
+                          modelId="M1"
+                          modelName="SigLIP Vision"
+                          variant="siglip"
+                          verdict={detailedResult.visual}
+                          confidence={detailedResult.visual_confidence}
+                          reasoning={detailedResult.visual === 'RUMOR' 
+                            ? "Visual patterns indicate high probability of digital manipulation or inconsistency with established real-world imagery."
+                            : "No significant visual anomalies detected in the image structure."
+                          }
+                        />
 
-                        <div className={`analysis-item ${detailedResult.text.toLowerCase().replace('-', '')}`}>
-                          <span className="item-label">Text Analysis:</span>
-                          <span className="item-value">{detailedResult.text}</span>
-                          {detailedResult.text_confidence && (
-                            <span className="item-confidence">({(detailedResult.text_confidence * 100).toFixed(0)}%)</span>
-                          )}
-                        </div>
+                        {/* M2: XLM-RoBERTa Text Analysis */}
+                        <ModelResultCard 
+                          modelId="M2"
+                          modelName="XLM-RoBERTa"
+                          variant="xlm"
+                          verdict={detailedResult.text}
+                          confidence={detailedResult.text_confidence}
+                          reasoning={detailedResult.text === 'RUMOR'
+                            ? "Textual semantics align with known misinformation patterns and inflammatory language typically found in rumors."
+                            : "Textual content follows standard journalistic patterns for legitimate news reporting."
+                          }
+                        />
 
-                        <div className={`analysis-item ${detailedResult.gemini.toLowerCase().replace('-', '')}`}>
-                          <span className="item-label">Forensic Check:</span>
-                          <span className="item-value">{detailedResult.gemini}</span>
-                          {detailedResult.gemini_analysis && (
-                            <div className="analysis-reasoning">
-                              <span className="reasoning-label">AI Forensic Report:</span>
-                              {detailedResult.gemini_analysis}
-                            </div>
-                          )}
-                        </div>
+                        {/* M3: Gemini AI Forensic */}
+                        <ModelResultCard 
+                          modelId="M3"
+                          modelName={detailedResult.gemini_model_used || "Gemini 3 Flash"}
+                          variant="gemini"
+                          verdict={detailedResult.gemini}
+                          reasoning={detailedResult.gemini_analysis}
+                          extraInfo="Image & Context Authenticity"
+                        />
 
-                        <div className={`analysis-item ${detailedResult.tavily.toLowerCase().replace('-', '')}`}>
-                          <span className="item-label">Web Verification:</span>
-                          <span className="item-value">{detailedResult.tavily}</span>
-                        </div>
+                        {/* M4: Tavily Web Verification */}
+                        <ModelResultCard 
+                          modelId="M4"
+                          modelName="Tavily Search"
+                          variant="tavily"
+                          verdict={detailedResult.tavily}
+                          reasoning={detailedResult.tavily_analysis}
+                          extraInfo="Cross-Reference Search Result"
+                        />
                       </div>
+
                       <div className="confidence-bar">
-                        <span>Confidence: {(detailedResult.confidence * 100).toFixed(0)}%</span>
+                        <span>Overall Aggregated Confidence: {(detailedResult.confidence * 100).toFixed(0)}%</span>
                         <div className="bar">
                           <div className="fill" style={{width: `${detailedResult.confidence * 100}%`}}></div>
                         </div>
