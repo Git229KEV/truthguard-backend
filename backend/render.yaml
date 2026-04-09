@@ -15,9 +15,7 @@ services:
         sync: false
       - key: TAVILY_API_KEY
         sync: false
-      - key: SIGLIP_DRIVE_ID
-        sync: false
-      - key: XLM_DRIVE_ID
+      - key: HF_TOKEN
         sync: false
       - key: SIGLIP_MODEL_PATH
         value: /opt/render/models/siglip

@@ -58,51 +58,17 @@ def list_gdrive_folder_contents(folder_id):
         print(f"[WARN] Cannot list folder: {e}")
         return []
 
-def download_from_gdrive(folder_id, dest_path):
+def download_from_huggingface(repo_id, dest_path):
     try:
-        import gdown
+        from huggingface_hub import snapshot_download
         os.makedirs(dest_path, exist_ok=True)
-        print(f"[INFO] Downloading from Google Drive folder: {folder_id}")
+        print(f"[INFO] Downloading from HuggingFace: {repo_id}")
         
-        url = f"https://drive.google.com/drive/folders/{folder_id}?usp=sharing"
+        kwargs = {"local_dir": dest_path, "local_dir_use_symlinks": False}
+        if HF_TOKEN:
+            kwargs["token"] = HF_TOKEN
         
-        print("[INFO] Attempting download with gdown.download_folder...")
-        success = False
-        try:
-            result = gdown.download_folder(url, output=dest_path, quiet=False, use_cookies=False, skip_install=True)
-            if result:
-                print(f"[INFO] gdown.download_folder returned: {result}")
-                success = True
-        except Exception as e:
-            print(f"[WARN] gdown.download_folder failed: {e}")
-        
-        if not success:
-            print("[INFO] Trying alternative download method...")
-            try:
-                import subprocess
-                result = subprocess.run(
-                    ["gdown", "--fuzzy", "--folder", url, "-O", dest_path, "--quiet"],
-                    capture_output=True, text=True, timeout=600
-                )
-                print(f"[INFO] gdown folder output: {result.stdout}")
-                if result.returncode == 0:
-                    success = True
-                else:
-                    print(f"[WARN] gdown error: {result.stderr}")
-            except Exception as e:
-                print(f"[WARN] Subprocess gdown failed: {e}")
-        
-        if not success:
-            print("[INFO] Trying to download individual files...")
-            try:
-                files_info = gdown.list_folder(url)
-                print(f"[INFO] Found files: {files_info}")
-                for file_id, file_name in files_info.items():
-                    file_url = f"https://drive.google.com/uc?id={file_id}"
-                    output_file = os.path.join(dest_path, file_name)
-                    gdown.download(file_url, output_file, quiet=False)
-            except Exception as e:
-                print(f"[WARN] File-by-file download failed: {e}")
+        snapshot_download(repo_id=repo_id, **kwargs)
         
         print(f"[INFO] Contents after download:")
         for root, dirs, files in os.walk(dest_path):
@@ -122,26 +88,18 @@ def download_from_gdrive(folder_id, dest_path):
         
         if model_files:
             print(f"[INFO] Found model files: {model_files}")
-            if dest_path not in [os.path.dirname(f) for f in model_files]:
-                first_file = model_files[0]
-                parent = os.path.dirname(first_file)
-                if parent != dest_path:
-                    print(f"[INFO] Moving files from {parent} to {dest_path}")
-                    import shutil
-                    for f in model_files:
-                        shutil.move(f, dest_path)
-                    shutil.rmtree(parent)
         
         return len(model_files) > 0
     except Exception as e:
-        print(f"[WARN] GDrive download failed: {e}")
+        print(f"[WARN] HuggingFace download failed: {e}")
         return False
 
-SIGLIP_DRIVE_ID = os.getenv("SIGLIP_DRIVE_ID")
-XLM_DRIVE_ID = os.getenv("XLM_DRIVE_ID")
+SIGLIP_HF_REPO = os.getenv("SIGLIP_HF_REPO", "Kevin229/final_siglip_model")
+XLM_HF_REPO = os.getenv("XLM_HF_REPO", "Kevin229/final_xlm_roberta_model")
+HF_TOKEN = os.getenv("HF_TOKEN")
 
-print(f"[INFO] SIGLIP_DRIVE_ID: {'set' if SIGLIP_DRIVE_ID else 'NOT SET'}")
-print(f"[INFO] XLM_DRIVE_ID: {'set' if XLM_DRIVE_ID else 'NOT SET'}")
+print(f"[INFO] SIGLIP_HF_REPO: {SIGLIP_HF_REPO}")
+print(f"[INFO] XLM_HF_REPO: {XLM_HF_REPO}")
 
 def check_model_valid(model_path, min_size_mb=50):
     for root, dirs, files in os.walk(model_path):
@@ -163,22 +121,22 @@ print(f"[INFO] XLM dir exists: {os.path.exists(XLM_PATH)}, has files: {xlm_exist
 siglip_valid = check_model_valid(SIGLIP_PATH) if siglip_exists else False
 xlm_valid = check_model_valid(XLM_PATH) if xlm_exists else False
 
-if SIGLIP_DRIVE_ID and (not siglip_exists or not siglip_valid):
-    print(f"[INFO] SigLIP not found or invalid, downloading from GDrive...")
+if not siglip_exists or not siglip_valid:
+    print(f"[INFO] SigLIP not found or invalid, downloading from HuggingFace...")
     import shutil
     if os.path.exists(SIGLIP_PATH):
         shutil.rmtree(SIGLIP_PATH)
-    download_from_gdrive(SIGLIP_DRIVE_ID, SIGLIP_PATH)
+    download_from_huggingface(SIGLIP_HF_REPO, SIGLIP_PATH)
     siglip_exists = os.path.exists(SIGLIP_PATH) and os.listdir(SIGLIP_PATH)
     siglip_valid = check_model_valid(SIGLIP_PATH)
     print(f"[INFO] SigLIP download result - exists: {siglip_exists}, valid: {siglip_valid}")
 
-if XLM_DRIVE_ID and (not xlm_exists or not xlm_valid):
-    print(f"[INFO] XLM not found or invalid, downloading from GDrive...")
+if not xlm_exists or not xlm_valid:
+    print(f"[INFO] XLM not found or invalid, downloading from HuggingFace...")
     import shutil
     if os.path.exists(XLM_PATH):
         shutil.rmtree(XLM_PATH)
-    download_from_gdrive(XLM_DRIVE_ID, XLM_PATH)
+    download_from_huggingface(XLM_HF_REPO, XLM_PATH)
     xlm_exists = os.path.exists(XLM_PATH) and os.listdir(XLM_PATH)
     xlm_valid = check_model_valid(XLM_PATH)
     print(f"[INFO] XLM download result - exists: {xlm_exists}, valid: {xlm_valid}")
