@@ -36,13 +36,13 @@ default_xlm_path = os.path.join(BASE_DIR, "models", "final_xlm_roberta_model")
 SIGLIP_PATH = os.getenv("SIGLIP_MODEL_PATH")
 if SIGLIP_PATH:
     SIGLIP_PATH = SIGLIP_PATH.strip('"').strip("'")
-if not SIGLIP_PATH or not os.path.exists(SIGLIP_PATH):
+if not SIGLIP_PATH:
     SIGLIP_PATH = default_siglip_path
 
 XLM_PATH = os.getenv("XLM_ROBERTA_MODEL_PATH")
 if XLM_PATH:
     XLM_PATH = XLM_PATH.strip('"').strip("'")
-if not XLM_PATH or not os.path.exists(XLM_PATH):
+if not XLM_PATH:
     XLM_PATH = default_xlm_path
 
 print(f"[INFO] SIGLIP_PATH: {SIGLIP_PATH}")

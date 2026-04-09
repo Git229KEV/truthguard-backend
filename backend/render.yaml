@@ -18,6 +18,6 @@ services:
       - key: HF_TOKEN
         sync: false
       - key: SIGLIP_MODEL_PATH
-        value: /opt/render/models/siglip
+        value: /opt/render/models/final_siglip_model
       - key: XLM_ROBERTA_MODEL_PATH
-        value: /opt/render/models/xlm
+        value: /opt/render/models/final_xlm_roberta_model
