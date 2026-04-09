@@ -448,29 +448,14 @@ async def analyze(file: UploadFile = File(...)):
                 fact_check_prompt = """You are a professional fact-checker analyzing a news image.
 
 TASK 1: Extract any visible text from the image and translate non-English text to English.
+TASK 2: Evaluate the image for signs of manipulation.
+TASK 3: Evaluate the CLAIM (text content) for truthfulness.
 
-TASK 2: Evaluate the image for signs of manipulation:
-- AI-generated artifacts
-- Metadata inconsistencies  
-- Unusual lighting/shadows
-- Poor image quality in specific areas
-- Watermark anomalies
-
-TASK 3: Evaluate the CLAIM (text content):
-- Is the claim verifiable?
-- Does it match official sources?
-- Is it misleading or taken out of context?
-
-Return your analysis in this format:
-
+Return your analysis in this EXACT format:
+**EXTRACTED TEXT:** [The text you extracted from the image]
 **CLAIM VERDICT:** [TRUE/FALSE/MISLEADING/UNVERIFIABLE]
-Explain the claim evaluation.
-
 **REPORT AUTHENTICITY:** [AUTHENTIC/MANIPULATED/SUSPICIOUS]
-Explain the image authenticity evaluation.
-
-**DETAILED ANALYSIS:**
-[Your comprehensive analysis]"""
+**DETAILED ANALYSIS:** [Your analysis]"""
                 
                 response = model.generate_content(
                     [{"mime_type": "image/jpeg", "data": img_base64}, fact_check_prompt],
@@ -481,9 +466,12 @@ Explain the image authenticity evaluation.
                 
                 claim_verdict = "NON-RUMOR"
                 report_verdict = "NON-RUMOR"
+                gemini_extracted_text = ""
                 
                 lines = response_text.split('\n')
                 for line in lines:
+                    if 'EXTRACTED TEXT:' in line.upper():
+                        gemini_extracted_text = line.split('EXTRACTED TEXT:')[1].strip()
                     if 'CLAIM VERDICT:' in line.upper():
                         claim_text = line.split('CLAIM VERDICT:')[1].strip().upper()
                         if 'FALSE' in claim_text or 'FAKE' in claim_text or 'MISLEADING' in claim_text:
@@ -519,6 +507,7 @@ Explain the image authenticity evaluation.
                 results["gemini_model_used"] = selected_model
                 results["claim_verdict"] = claim_verdict
                 results["report_verdict"] = report_verdict
+                results["original_text"] = gemini_extracted_text
                 
                 print(f"[Gemini] Claim: {claim_verdict}, Report: {report_verdict} -> Final: {gemini_verdict}")
                 
@@ -575,7 +564,7 @@ Explain the image authenticity evaluation.
                 text_display = "ERROR"
 
         # 📑 PILLAR 3: TAVILY (WEB RESEARCH) - INDEPENDENT
-        search_command = extracted_text[:200] if extracted_text else "latest news verified facts"
+        search_command = results["original_text"] if results["original_text"] else (extracted_text[:200] if extracted_text else "latest news verified facts")
         verdict_tav = "UNAVAILABLE"
         
         if tavily_client:

@@ -60,6 +60,7 @@ const ModelResultCard = ({
   extraInfo
 }) => {
   const isRumor = verdict === 'RUMOR';
+  const isGeminiOrTavily = variant === 'gemini' || variant === 'tavily';
   
   const getIcon = () => {
     switch (variant) {
@@ -78,7 +79,7 @@ const ModelResultCard = ({
         <span>MODEL {modelId}: {modelName}</span>
       </div>
 
-      <div className="card-title-row">
+      <div className={`card-title-row ${isGeminiOrTavily ? 'success' : ''}`}>
         <ShieldIcon />
         <span>Analysis Report</span>
       </div>
@@ -89,9 +90,9 @@ const ModelResultCard = ({
       </div>
 
       <div className="analysis-report-container">
-        <div className="report-header">
+        <div className={`report-header ${isGeminiOrTavily ? 'success' : ''}`}>
           <ShieldIcon />
-          <span>{variant === 'gemini' ? 'DEEP ANALYSIS' : 'ANALYSIS BREAKDOWN'}</span>
+          <span>{variant === 'gemini' ? 'Analysis Report' : 'ANALYSIS BREAKDOWN'}</span>
         </div>
         
         {extraInfo && (
@@ -102,8 +103,8 @@ const ModelResultCard = ({
           {reasoning || "Analysis details are being compiled..."}
         </div>
         
-        {confidence && (
-          <div style={{ marginTop: '1rem', fontSize: '0.8rem', color: '#64748b', fontWeight: 'bold' }}>
+        {confidence && !isGeminiOrTavily && (
+          <div style={{ marginTop: '1rem', fontSize: '0.8rem', color: 'var(--text-muted)', fontWeight: 'bold' }}>
             CONFIDENCE SCORE: {(confidence * 100).toFixed(1)}%
           </div>
         )}

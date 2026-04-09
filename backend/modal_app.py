@@ -266,7 +266,8 @@ TASK 1: Extract any visible text from the image and translate non-English text t
 TASK 2: Evaluate the image for signs of manipulation.
 TASK 3: Evaluate the CLAIM (text content) for truthfulness.
 
-Return your analysis in this format:
+Return your analysis in this EXACT format:
+**EXTRACTED TEXT:** [The text you extracted from the image]
 **CLAIM VERDICT:** [TRUE/FALSE/MISLEADING/UNVERIFIABLE]
 **REPORT AUTHENTICITY:** [AUTHENTIC/MANIPULATED/SUSPICIOUS]
 **DETAILED ANALYSIS:** [Your analysis]"""
@@ -300,9 +301,12 @@ Return your analysis in this format:
                 
                 claim_verdict = "NON-RUMOR"
                 report_verdict = "NON-RUMOR"
+                extracted_text = ""
                 
                 lines = response_text.split('\n')
                 for line in lines:
+                    if 'EXTRACTED TEXT:' in line.upper():
+                        extracted_text = line.split('EXTRACTED TEXT:')[1].strip()
                     if 'CLAIM VERDICT:' in line.upper():
                         claim_text = line.split('CLAIM VERDICT:')[1].strip().upper()
                         if 'FALSE' in claim_text or 'FAKE' in claim_text or 'MISLEADING' in claim_text:
@@ -318,6 +322,7 @@ Return your analysis in this format:
                 results["gemini_model_used"] = selected_model
                 results["claim_verdict"] = claim_verdict
                 results["report_verdict"] = report_verdict
+                results["original_text"] = extracted_text
                 print(f"[Gemini] Claim: {claim_verdict}, Report: {report_verdict} -> {gemini_verdict} ({selected_model})")
                 
             except Exception as e:
@@ -328,7 +333,7 @@ Return your analysis in this format:
         if tavily_client:
             try:
                 print("[Tavily] Running web search...")
-                search_query = "latest verified news facts"
+                search_query = results["original_text"] if results["original_text"] else "latest verified news facts"
                 
                 tav_res = tavily_client.search(
                     query=search_query,
