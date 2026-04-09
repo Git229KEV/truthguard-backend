@@ -64,28 +64,55 @@ def download_from_gdrive(folder_id, dest_path):
         os.makedirs(dest_path, exist_ok=True)
         print(f"[INFO] Downloading from Google Drive folder: {folder_id}")
         
-        url = f"https://drive.google.com/drive/folders/{folder_id}"
+        url = f"https://drive.google.com/drive/folders/{folder_id}?usp=sharing"
         
+        print("[INFO] Attempting download with gdown.download_folder...")
+        success = False
         try:
-            gdown.download_folder(url, output=dest_path, quiet=False, use_cookies=False)
+            result = gdown.download_folder(url, output=dest_path, quiet=False, use_cookies=False, skip_install=True)
+            if result:
+                print(f"[INFO] gdown.download_folder returned: {result}")
+                success = True
         except Exception as e:
             print(f"[WARN] gdown.download_folder failed: {e}")
-            print("[INFO] Trying with --fuzzy flag...")
-            import subprocess
-            result = subprocess.run(
-                ["gdown", "--fuzzy", "-O", dest_path, url],
-                capture_output=True, text=True
-            )
-            print(f"[INFO] gdown output: {result.stdout}")
-            if result.returncode != 0:
-                print(f"[WARN] gdown error: {result.stderr}")
+        
+        if not success:
+            print("[INFO] Trying alternative download method...")
+            try:
+                import subprocess
+                result = subprocess.run(
+                    ["gdown", "--fuzzy", "--folder", url, "-O", dest_path, "--quiet"],
+                    capture_output=True, text=True, timeout=600
+                )
+                print(f"[INFO] gdown folder output: {result.stdout}")
+                if result.returncode == 0:
+                    success = True
+                else:
+                    print(f"[WARN] gdown error: {result.stderr}")
+            except Exception as e:
+                print(f"[WARN] Subprocess gdown failed: {e}")
+        
+        if not success:
+            print("[INFO] Trying to download individual files...")
+            try:
+                files_info = gdown.list_folder(url)
+                print(f"[INFO] Found files: {files_info}")
+                for file_id, file_name in files_info.items():
+                    file_url = f"https://drive.google.com/uc?id={file_id}"
+                    output_file = os.path.join(dest_path, file_name)
+                    gdown.download(file_url, output_file, quiet=False)
+            except Exception as e:
+                print(f"[WARN] File-by-file download failed: {e}")
         
         print(f"[INFO] Contents after download:")
         for root, dirs, files in os.walk(dest_path):
             for f in files:
                 full_path = os.path.join(root, f)
-                size = os.path.getsize(full_path) / (1024*1024)
-                print(f"  {os.path.relpath(full_path, dest_path)} ({size:.1f} MB)")
+                try:
+                    size = os.path.getsize(full_path) / (1024*1024)
+                    print(f"  {os.path.relpath(full_path, dest_path)} ({size:.1f} MB)")
+                except:
+                    pass
         
         model_files = []
         for root, dirs, files in os.walk(dest_path):
@@ -105,7 +132,7 @@ def download_from_gdrive(folder_id, dest_path):
                         shutil.move(f, dest_path)
                     shutil.rmtree(parent)
         
-        return True
+        return len(model_files) > 0
     except Exception as e:
         print(f"[WARN] GDrive download failed: {e}")
         return False
@@ -116,23 +143,45 @@ XLM_DRIVE_ID = os.getenv("XLM_DRIVE_ID")
 print(f"[INFO] SIGLIP_DRIVE_ID: {'set' if SIGLIP_DRIVE_ID else 'NOT SET'}")
 print(f"[INFO] XLM_DRIVE_ID: {'set' if XLM_DRIVE_ID else 'NOT SET'}")
 
+def check_model_valid(model_path, min_size_mb=50):
+    for root, dirs, files in os.walk(model_path):
+        for f in files:
+            if f in ['model.safetensors', 'pytorch_model.bin']:
+                size_mb = os.path.getsize(os.path.join(root, f)) / (1024*1024)
+                print(f"[INFO] Found {f} at {root}: {size_mb:.1f} MB")
+                if size_mb < min_size_mb:
+                    print(f"[WARN] {f} is too small ({size_mb:.1f} MB), likely corrupted")
+                    return False
+    return True
+
 siglip_exists = os.path.exists(SIGLIP_PATH) and os.listdir(SIGLIP_PATH)
 xlm_exists = os.path.exists(XLM_PATH) and os.listdir(XLM_PATH)
 
 print(f"[INFO] SigLIP dir exists: {os.path.exists(SIGLIP_PATH)}, has files: {siglip_exists}")
 print(f"[INFO] XLM dir exists: {os.path.exists(XLM_PATH)}, has files: {xlm_exists}")
 
-if SIGLIP_DRIVE_ID and not siglip_exists:
-    print(f"[INFO] SigLIP not found, downloading from GDrive...")
+siglip_valid = check_model_valid(SIGLIP_PATH) if siglip_exists else False
+xlm_valid = check_model_valid(XLM_PATH) if xlm_exists else False
+
+if SIGLIP_DRIVE_ID and (not siglip_exists or not siglip_valid):
+    print(f"[INFO] SigLIP not found or invalid, downloading from GDrive...")
+    import shutil
+    if os.path.exists(SIGLIP_PATH):
+        shutil.rmtree(SIGLIP_PATH)
     download_from_gdrive(SIGLIP_DRIVE_ID, SIGLIP_PATH)
     siglip_exists = os.path.exists(SIGLIP_PATH) and os.listdir(SIGLIP_PATH)
-    print(f"[INFO] SigLIP download result - exists: {siglip_exists}")
+    siglip_valid = check_model_valid(SIGLIP_PATH)
+    print(f"[INFO] SigLIP download result - exists: {siglip_exists}, valid: {siglip_valid}")
 
-if XLM_DRIVE_ID and not xlm_exists:
-    print(f"[INFO] XLM not found, downloading from GDrive...")
+if XLM_DRIVE_ID and (not xlm_exists or not xlm_valid):
+    print(f"[INFO] XLM not found or invalid, downloading from GDrive...")
+    import shutil
+    if os.path.exists(XLM_PATH):
+        shutil.rmtree(XLM_PATH)
     download_from_gdrive(XLM_DRIVE_ID, XLM_PATH)
     xlm_exists = os.path.exists(XLM_PATH) and os.listdir(XLM_PATH)
-    print(f"[INFO] XLM download result - exists: {xlm_exists}")
+    xlm_valid = check_model_valid(XLM_PATH)
+    print(f"[INFO] XLM download result - exists: {xlm_exists}, valid: {xlm_valid}")
 
 genai_client = None
 tavily_client = None
@@ -184,7 +233,9 @@ def get_available_memory_mb():
 def find_model_dir(base_path):
     if os.path.exists(base_path):
         for root, dirs, files in os.walk(base_path):
+            print(f"[DEBUG] Checking dir: {root}, files: {files}")
             if 'config.json' in files and any(f in files for f in ['pytorch_model.bin', 'model.safetensors', 'model.bin']):
+                print(f"[INFO] Found model files in: {root}")
                 return root
     return base_path
 
@@ -212,8 +263,13 @@ def load_models_background():
         
         if siglip_model is None:
             try:
+                print(f"[INFO] SigLIP base path: {SIGLIP_PATH}")
+                print(f"[INFO] SigLIP path exists: {os.path.exists(SIGLIP_PATH)}")
+                if os.path.exists(SIGLIP_PATH):
+                    print(f"[INFO] SigLIP contents: {os.listdir(SIGLIP_PATH)}")
                 siglip_actual_path = find_model_dir(SIGLIP_PATH)
-                if SIGLIP_PATH and os.path.exists(SIGLIP_PATH):
+                print(f"[INFO] SigLIP actual path: {siglip_actual_path}")
+                if siglip_actual_path and os.path.exists(siglip_actual_path):
                     print(f"[INFO] Loading SIGLIP from: {siglip_actual_path}")
                     siglip_model = SiglipForImageClassification.from_pretrained(
                         siglip_actual_path, 
@@ -222,7 +278,7 @@ def load_models_background():
                     )
                     siglip_processor = SiglipProcessor.from_pretrained(siglip_actual_path)
                 else:
-                    print(f"[WARN] SIGLIP path not found: {SIGLIP_PATH}")
+                    print(f"[WARN] SIGLIP model files not found in: {SIGLIP_PATH}")
                     raise FileNotFoundError(f"SigLIP model not found at {SIGLIP_PATH}")
                 siglip_model = siglip_model.to(device)
                 siglip_model.eval()
@@ -239,8 +295,13 @@ def load_models_background():
         
         if xlm_model is None:
             try:
+                print(f"[INFO] XLM base path: {XLM_PATH}")
+                print(f"[INFO] XLM path exists: {os.path.exists(XLM_PATH)}")
+                if os.path.exists(XLM_PATH):
+                    print(f"[INFO] XLM contents: {os.listdir(XLM_PATH)}")
                 xlm_actual_path = find_model_dir(XLM_PATH)
-                if XLM_PATH and os.path.exists(XLM_PATH):
+                print(f"[INFO] XLM actual path: {xlm_actual_path}")
+                if xlm_actual_path and os.path.exists(xlm_actual_path):
                     print(f"[INFO] Loading XLM-RoBERTa from: {xlm_actual_path}")
                     xlm_tokenizer = XLMRobertaTokenizer.from_pretrained(xlm_actual_path)
                     xlm_model = XLMRobertaForSequenceClassification.from_pretrained(
@@ -249,7 +310,7 @@ def load_models_background():
                         torch_dtype=torch.float32
                     )
                 else:
-                    print(f"[WARN] XLM-RoBERTa path not found: {XLM_PATH}")
+                    print(f"[WARN] XLM-RoBERTa model files not found in: {XLM_PATH}")
                     raise FileNotFoundError(f"XLM-RoBERTa model not found at {XLM_PATH}")
                 xlm_model = xlm_model.to(device)
                 xlm_model.eval()
@@ -268,7 +329,7 @@ def load_models_background():
         
     models_ready["siglip"] = siglip_model is not None
     models_ready["xlm"] = xlm_model is not None
-    models_ready["status"] = "ready" if siglip_model else "partial"
+    models_ready["status"] = "ready"
     print(f"[INFO] Models ready: {models_ready}")
 
 @asynccontextmanager
